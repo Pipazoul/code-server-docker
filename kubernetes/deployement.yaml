@@ -1,3 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vscode-server
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vscode-storage-pvc
+  namespace: vscode-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,21 +32,20 @@ spec:
       labels:
         app: vscode-server
     spec:
-      # Specify the node where the pod should run if needed
       # runtimeClassName: nvidia
       # nodeSelector:
-      #   preferred-node: mynode
+      #   preferred-node: rtx-4090-worker
       # tolerations:
-      # - key: "gpu"
-      #   operator: "Equal"
-      #   value: "true"
-      #   effect: "NoSchedule"
+      #   - key: "gpu"
+      #     operator: "Equal"
+      #     value: "true"
+      #     effect: "NoSchedule"
       securityContext:
         privileged: true  # Required for Docker-in-Docker
       containers:
         - name: vscode-server
           image: yassinsiouda/vscode-server:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8443
               name: vscode
@@ -39,49 +55,34 @@ spec:
               port: 8443
           env:
             - name: PASSWORD
-              value: "password"  # Set your password here
+              value: ""
             - name: TZ
-              value: "Europe/Paris"
+              value: "UTC"
             - name: PUID
               value: "1000"
             - name: PGID
               value: "1000"
             - name: SUDO_PASSWORD
-              value: "password"  # For sudo privileges within the container
+              value: ""
             - name: NVIDIA_VISIBLE_DEVICES
               value: all
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: all
           volumeMounts:
-            - mountPath: /config
-              name: vscode-volume
-            - mountPath: /config/workspace
-              name: vscode-volume
-            - mountPath: /var/run/docker.sock
-              name: docker-socket
+            - name: storage
+              mountPath: /config
+            - name: storage
+              mountPath: /config/workspace
+              subPath: workspace
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
       volumes:
-        - name: vscode-volume
+        - name: storage
           persistentVolumeClaim:
-            claimName: vscode-pv-claim
-        - name: docker-socket
+            claimName: vscode-storage-pvc
+        - name: docker-sock
           hostPath:
             path: /var/run/docker.sock
-            type: Socket
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vscode-pv-claim
-  namespace: vscode-server
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: longhorn-single-replica
-  resources:
-    requests:
-      storage: 30Gi
-
 ---
 apiVersion: v1
 kind: Service
@@ -96,28 +97,23 @@ spec:
       protocol: TCP
       port: 8443
       targetPort: 8443
-
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: vscode-server
   namespace: vscode-server
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
 spec:
   rules:
-  - host: mydomain.com
-    http:
-      paths:
-        - path: /
-          pathType: Prefix
-          backend:
-            service:
-              name: vscode-server
-              port:
-                number: 8443
-
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: vscode-server
+    - host: mydomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vscode-server
+                port:
+                  number: 8443
